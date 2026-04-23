@@ -1,0 +1,964 @@
+NOVELAI WEB UI PRO - PROGRAM GUIDE
+==================================
+
+1. OVERVIEW
+-----------
+
+This project is a local web app for generating images through NovelAI with:
+
+- Base Prompt and Negative Prompt editing
+- Prompt template system (save/load multiple configurations)
+- Character-based dynamic prompt workflow
+- Reference image support
+- Batch generation with unique seeds
+- Queue-based batch generation (persistent across server restarts)
+- External LoRA processor integration through Python
+- Temporary TXT prompt generation for character processing
+- Focus mode for distraction-free generation progress tracking
+
+Main runtime:
+
+- Frontend: React + Vite
+- Backend: Node/Express in server.ts
+- External processor bridge: Python
+
+
+2. MAIN FILES
+-------------
+
+Core files in this repo:
+
+- run.bat
+  Starts the project workflow on Windows.
+
+- server.ts
+  Express server, proxy to NovelAI, batch generation, temp TXT cleanup,
+  external character prompt processing, queue management, and template storage.
+
+- src/App.tsx
+  Main frontend UI and generation workflow. Includes prompt templates,
+  focus mode, and queue generation interface.
+
+- src/lib/novelai.ts
+  Payload builder and generation helpers.
+
+- tools/lora_processor_bridge.py
+  Python bridge that imports and runs the external lora_processor.py.
+
+- queue-worker.ts
+  Standalone background worker for queue generation. Runs as a child process
+  spawned by server.ts. Processes character batches independently.
+
+- docs/lora-processor-integration.md
+  Technical integration notes for future maintenance.
+
+- data/prompt-templates.json
+  Persisted prompt template definitions (Base + Negative prompts).
+  Created and managed by the Templates tab UI.
+
+- data/generation-queue.json
+  Current generation queue state. Stores full snapshot of characters,
+  settings, and progress. Used for resuming interrupted generations.
+
+- temp_character_prompts/
+  Temporary generated TXT prompt files.
+  This folder is deleted and recreated each time the Node server starts.
+
+
+3. HOW THE APP WORKS
+--------------------
+
+The app has several major prompt sources:
+
+- Base Prompt
+  Global prompt applied to generation.
+
+- Negative Prompt
+  Global negative prompt.
+
+- Character Tags (Dynamic)
+  Prompt content for the currently active character.
+
+- Dynamic prompt lines from TXT
+  Generated from the external processor or loaded manually.
+
+Final prompt composition during generation:
+
+- filePrompt + Character Tags (Dynamic) + Base Prompt
+
+Where:
+
+- filePrompt = one line from promptsFromFile
+- Character Tags (Dynamic) = current character prompt
+- Base Prompt = global prompt from the main prompt tab
+
+
+4. CHARACTER WORKFLOW
+---------------------
+
+Each character card in the "Character Browser (Dynamic)" area contains:
+
+- Character Name
+- Character image
+- Character Tags (Dynamic)
+- Folder path
+- Strength
+- Fidelity
+- Dynamic prompt lines
+
+Important meaning:
+
+- Character Name
+  Used as output folder name and temp TXT file name.
+
+- Character Tags (Dynamic)
+  This is the main input sent to the external processor.
+
+- Folder path
+  This is the folder passed to the processor and tag enhancer.
+
+
+5. GENERATE FLOW
+----------------
+
+When the user clicks Generate:
+
+1. The app resolves the active character.
+2. If the active character has:
+   - a folder path
+   - Character Tags (Dynamic)
+   then the app calls the backend processor endpoint.
+3. The backend runs the Python bridge.
+4. The bridge imports the external processor module.
+5. The processor creates character prompt TXT output.
+6. The generated TXT is copied into temp_character_prompts inside this repo.
+7. The frontend receives all non-empty lines from that TXT.
+8. Those lines become promptsFromFile for the character.
+9. Generation starts using one line at a time.
+
+If auto-browsing is enabled, the app continues to the next line automatically.
+
+
+6. EXTERNAL LORA PROCESSOR INTEGRATION
+--------------------------------------
+
+The current app does NOT inherit the old Tkinter browser UI from:
+
+- D:\no\lora_browser.py
+
+It only reuses processing logic from:
+
+- D:\no\lora_processor.py
+
+Current integration method:
+
+- The frontend sends:
+  - folderPath
+  - characterName
+  - characterPrompt
+  - processorPath
+
+- The backend endpoint:
+  POST /api/process-character-prompts
+
+- The backend launches:
+  tools/lora_processor_bridge.py
+
+- The bridge imports the external file path given by the UI.
+
+Default processor path in the UI:
+
+- D:\no\lora_processor.py
+
+
+7. TEMP TXT FILES
+-----------------
+
+Temporary generated prompt TXT files are stored in:
+
+- temp_character_prompts/
+
+Behavior:
+
+- Files are generated during character processing.
+- Files are copied from the external processor output into this repo.
+- Files are deleted automatically when the server starts.
+
+Reason:
+
+- Keep processor output local to this project for inspection
+- Avoid stale character TXT files carrying over across restarts
+
+
+8. BATCH GENERATION
+-------------------
+
+Batch Count controls repeated generation using the same effective prompt flow.
+
+If Batch Count = 2:
+
+- the app uses the same prompt composition logic
+- it creates 2 unique seeds
+- it runs generation twice
+
+Important note:
+
+- Requests are serialized safely on the backend to avoid
+  "Concurrent generation is locked"
+
+- The backend also retries temporary 429 lock responses from NovelAI
+
+
+9. SETTINGS AND PATHS
+---------------------
+
+Important configurable paths and values:
+
+- LoRA Processor Path
+  Set in the Settings tab
+  Default: D:\no\lora_processor.py
+
+- Character folder path
+  Set per character card
+
+- Output folder
+  Images are saved under the project's output folder
+
+- Prompt Templates Storage
+  Templates are persisted in: data/prompt-templates.json
+  Managed via the Templates tab UI
+
+- Generation Queue Storage
+  Queue state is persisted in: data/generation-queue.json
+  Automatically managed by queue endpoints
+
+
+10. SERVER RESPONSIBILITIES
+---------------------------
+
+server.ts currently handles:
+
+- serving the frontend
+- proxying generate requests to NovelAI
+- batch generation (on-demand)
+- queue generation management (persistent)
+- output image saving
+- temp TXT cleanup on startup
+- running the external processor bridge
+- folder opening helper
+- prompt template persistence
+- queue worker process spawning and management
+
+Important backend endpoints:
+
+- POST /api/generate
+- POST /api/generate-batch
+- GET  /api/batch-status/:id
+- POST /api/batch-cancel/:id
+- POST /api/process-character-prompts
+- POST /api/read-prompts
+- GET  /api/open-output-folder
+- GET  /api/templates
+- POST /api/templates
+- PUT  /api/templates/:id
+- DELETE /api/templates/:id
+- POST /api/queue/start
+- GET  /api/queue/status
+- POST /api/queue/resume
+- POST /api/queue/cancel
+- DELETE /api/queue
+
+
+11. FRONTEND RESPONSIBILITIES
+-----------------------------
+
+src/App.tsx currently handles:
+
+- all prompt editing
+- character card editing
+- reference image management
+- generation control
+- auto-browsing between prompt lines
+- processor path input
+- syncing generated TXT lines into character prompt state
+
+Important frontend function names:
+
+- handleGenerate(...)
+- syncCharacterPrompts(...)
+- handleStopAll(...)
+
+
+12. PYTHON BRIDGE RESPONSIBILITIES
+----------------------------------
+
+tools/lora_processor_bridge.py is responsible for:
+
+- loading the external processor file dynamically
+- running run_tag_enhancer(folder)
+- running process_character_txt(folder, character_prompt)
+- copying the generated TXT into temp_character_prompts
+- returning JSON with:
+  - message
+  - characterFile
+  - tempFile
+  - prompts
+
+
+13. HOW TO START THE PROGRAM
+----------------------------
+
+Typical Windows flow:
+
+1. Open this repo folder
+2. Run:
+   run.bat
+3. The script checks Node and npm
+4. It installs dependencies if needed
+5. It starts the dev server
+6. It opens the browser at:
+   http://localhost:3000
+
+Alternative manual commands:
+
+- npm run dev
+- npm run build
+- npm run lint
+
+
+14. MAINTENANCE GUIDE
+---------------------
+
+If something needs updating later, use this order:
+
+1. Check if D:\no\lora_processor.py changed
+2. If processor function signatures changed:
+   update tools/lora_processor_bridge.py
+3. If API contracts changed:
+   update server.ts
+4. If generation flow changed:
+   update src/App.tsx
+5. Update this TXT guide and docs/lora-processor-integration.md
+
+
+15. IMPORTANT CURRENT DESIGN DECISIONS
+--------------------------------------
+
+- The app uses Character Tags (Dynamic) as the main character processor input.
+- The external Tkinter LoRA browser UI is NOT embedded into this web app.
+- TXT outputs are temporary and intentionally cleared on next startup.
+- Generated prompt lines are consumed line-by-line in the web app.
+- Final image generation still uses the app's own current Base Prompt and settings.
+
+
+16. KNOWN LIMITATIONS
+---------------------
+
+- The integration depends on a local Python runtime being available.
+- The external processor path must remain valid.
+- The external processor file is outside this repo, so changes there can affect behavior here.
+- End-to-end processing can fail if the external folder path is wrong or tag enhancer output is missing.
+
+
+17. RECOMMENDED FUTURE IMPROVEMENTS
+-----------------------------------
+
+- Persist LoRA processor path in local storage or config
+- Show processor status directly on each character card
+- Expose processor stdout/stderr in a debug panel
+- Add a manual "Process Only" button separate from Generate
+- Add stronger validation for folder paths and Python availability
+- Optionally vendor a stable local copy of processor logic if external dependency becomes too fragile
+
+
+19. PROMPT TEMPLATES
+--------------------
+
+The app includes a prompt template system for saving and reusing prompt configurations.
+
+How it works:
+
+- Templates are stored in: data/prompt-templates.json
+- Each template contains: id, name, basePrompt, negativePrompt
+
+Frontend UI (Templates tab):
+
+- "Save Current Prompts" section: input field + Save button
+- "Saved Templates" list: shows all templates with Load and Delete buttons
+- Smart overwrite rule: loads only non-empty fields from template
+  (if template has basePrompt but not negativePrompt, only basePrompt gets replaced)
+
+Backend endpoints:
+
+- GET  /api/templates          — read all templates
+- POST /api/templates          — save new template
+- PUT  /api/templates/:id      — update template name/prompts
+- DELETE /api/templates/:id    — delete template
+
+Use case: Save commonly-used prompt combinations (e.g., "Anime Portrait", "Realistic Photo")
+
+
+20. GENERATION QUEUE
+--------------------
+
+The app includes a persistent queue system for background generation that survives
+server restarts.
+
+How it works:
+
+1. User configures characters, prompts, and settings
+2. User clicks "Queue & Run" button
+3. Frontend sends full snapshot to POST /api/queue/start
+4. Server saves queue to data/generation-queue.json
+5. Server spawns queue-worker.ts as independent child process
+6. Worker processes characters one by one, updating progress in JSON file
+7. Frontend polls GET /api/queue/status every 2 seconds for progress updates
+8. User can close browser tab or stop server - generation continues
+9. On next server start, checkInterruptedQueue() marks unfinished queue as "paused"
+10. User sees resume banner with [Resume] and [Dismiss] buttons
+11. Clicking Resume re-spawns worker from saved progress
+
+Queue JSON structure (data/generation-queue.json):
+
+- id, status, createdAt
+- settings (model, batchCount, delays, etc.)
+- basePrompt, negativePrompt
+- characters array (with promptsFromFile lines)
+- progress object (currentCharacterIndex, currentLineIndex, doneImages, totalImages)
+
+Key design decisions:
+
+- Queue worker is a standalone TypeScript file (queue-worker.ts)
+- Run via: npx tsx queue-worker.ts
+- Progress is saved to JSON after each batch, enabling safe resume
+- If server crashes mid-generation, the queue file preserves last checkpoint
+- Only one queue can run at a time (existing design)
+
+Backend queue endpoints:
+
+- POST /api/queue/start          — save queue + spawn worker
+- GET  /api/queue/status         — read queue progress from JSON
+- POST /api/queue/resume         — resume paused queue (re-spawn worker)
+- POST /api/queue/cancel         — cancel running queue
+- DELETE /api/queue              — clear queue file
+
+Focus Mode integration:
+
+- When queue is running, Focus Mode is auto-enabled
+- Shows progress bar, currentChar, currentLine counts
+- Automatically disables when queue completes
+- User can toggle Focus Mode manually anytime
+
+
+21. KNOWN BUGS FIXED AND LESSONS LEARNED (2026-04-11)
+-----------------------------------------------------
+
+Critical bugs discovered and fixed during development:
+
+A) VITE HMR FULL-PAGE RELOAD BUG (ROOT CAUSE OF MANY ISSUES)
+   - Problem: Vite watches the entire project directory. When server writes to
+     data/prompt-templates.json or data/generation-queue.json, Vite detects file
+     change and triggers full page reload via HMR.
+   - Fix: Added `server.watch.ignored` in vite.config.ts to exclude data/, output/,
+     and temp_character_prompts/ directories.
+   - Lesson: Any backend that writes files in the same directory as a Vite project
+     MUST exclude those paths from the file watcher.
+
+B) WINDOWS PROCESS KILL BUG
+   - Problem: spawn('npx', [...], { shell: true }) creates cmd.exe wrapper on Windows.
+     Calling .kill() only kills cmd.exe, the actual node process survives.
+   - Fix: Use `taskkill /pid X /T /F` on Windows to kill entire process tree.
+   - Lesson: On Windows with shell: true, always use taskkill for process cleanup.
+
+C) QUEUE STATUS OVERWRITE BUG
+   - Problem: When user cancels queue, server sets status='cancelled'. But queue-worker
+     sees this, callApiGenerate returns false, catch block overwrites status to 'paused'.
+     This causes "Queue was interrupted" banner to re-appear.
+   - Fix: Before throwing error after callApiGenerate failure, re-read queue status.
+     If it's not 'running', exit cleanly without writing 'paused'.
+
+D) TEMPLATE THUMBNAIL FEATURE (REMOVED - TOO COMPLEX)
+   - Problem: Browser creates blob:// URLs via URL.createObjectURL(). These are NOT
+     data URLs and cannot be sent to server. Even after converting with FileReader,
+     the round-trip (capture → base64 → send → decode → save PNG → read → base64 → serve)
+     was unreliable and added too much complexity.
+   - Decision: Feature removed entirely. Templates store only name + prompts.
+   - Future improvement: If thumbnails are needed, use a simpler approach:
+     * Let server save the generated PNG directly when image is created
+     * Store path reference only (not base64) in template
+     * Serve via static file route instead of embedding in JSON
+     * Or: capture canvas screenshot client-side and send as small JPEG
+
+E) QUEUE BANNER PERSISTENCE BUG
+   - Problem: After dismissing "Queue interrupted" banner, pressing F5 or any action
+     that reloads the page would show the banner again (because queue file still exists
+     with status='paused').
+   - Fix: Dismiss button now DELETES the queue file entirely via DELETE /api/queue.
+     Stop All also deletes the file. This ensures no stale state.
+
+F) DUPLICATE QUEUE START BUG
+   - Problem: No guard against starting a new queue while one is running.
+     Two workers writing to the same JSON file causes corruption.
+   - Fix: Server returns 409 Conflict if queue status is already 'running'.
+     Frontend also checks polling interval before starting.
+
+
+22. QUICK SUMMARY
+-----------------
+
+This program is now a comprehensive web-based NovelAI prompt workflow system where:
+
+- Prompt templates save/load multiple Base + Negative configurations
+- Character Tags (Dynamic) can be processed into line-based TXT prompts
+- Temporary TXT outputs are stored inside this repo
+- Generate consumes those lines one by one (on-demand)
+- Queue & Run persists a generation task that survives server restarts
+- Each prompt line is combined with Base Prompt and current settings
+- Focus Mode provides distraction-free progress tracking
+- The backend safely serializes and retries requests to NovelAI
+
+23. NOVELAI API REQUEST STRUCTURE ANALYSIS
+------------------------------------------
+
+This section documents the exact structure of the HTTP request sent to NovelAI's
+image generation API (POST https://image.novelai.net/ai/generate-image).
+
+The request is sent as multipart/form-data with a single part named "request"
+containing a JSON blob (Content-Type: application/json).
+
+TOP-LEVEL FIELDS:
+-----------------
+
+- input (string)
+  The final composed positive prompt text. This is the fully assembled prompt
+  that includes quality prefixes + character tags + base prompt combined.
+  Example: "masterpiece, best quality, amazing quality, ..."
+
+- model (string)
+  The NovelAI diffusion model ID to use.
+  Known values:
+    "nai-diffusion-4-5-full"    — NAI Diffusion V4.5 Full
+    "nai-diffusion-3"           — NAI Diffusion V3 (Anime)
+  The model selection determines which generation backend and capabilities
+  are available (V4+ supports character prompts, coords, etc.).
+
+- action (string)
+  The type of generation action.
+  Known values:
+    "generate"   — standard text-to-image generation
+    "img2img"    — image-to-image transformation
+    "inpaint"    — inpainting on masked regions
+
+- use_new_shared_trial (boolean)
+  Flag related to NovelAI's subscription/trial system. Set to true for
+  shared trial access. Not relevant to generation quality.
+
+- recaptcha_token (string)
+  Google reCAPTCHA v3 token for bot protection. This is generated client-side
+  by NovelAI's web interface and validated server-side. Our proxy server
+  forwards this as-is. Token is single-use and expires quickly.
+
+
+PARAMETERS OBJECT (parameters):
+-------------------------------
+
+Core generation settings:
+
+- params_version (number: 3)
+  Internal API version for the parameter schema. Currently always 3.
+
+- width / height (number)
+  Output image dimensions in pixels.
+  Common values: 832x1216 (portrait), 1216x832 (landscape), 1024x1024 (square).
+  Must be multiples of 64. Larger sizes cost more Anlas.
+
+- scale (number: 0-10+)
+  CFG (Classifier-Free Guidance) scale. Controls how strongly the model
+  follows the prompt. Higher = more prompt adherence but potentially less
+  natural results. Typical range: 4-7. Value of 5 is a balanced default.
+
+- sampler (string)
+  The sampling algorithm used for denoising.
+  Known values:
+    "k_euler_ancestral"  — Euler Ancestral (most common, good quality/speed)
+    "k_euler"            — Euler (deterministic variant)
+    "k_dpmpp_2m"         — DPM++ 2M (high quality)
+    "k_dpmpp_sde"        — DPM++ SDE (stochastic variant)
+  The sampler affects both image quality and generation characteristics.
+
+- steps (number: 1-50)
+  Number of denoising steps. More steps = higher quality but slower.
+  Typical: 28 steps. Diminishing returns above 35-40.
+
+- n_samples (number: 1)
+  Number of images to generate per request. Usually 1 in our app
+  (we handle batching ourselves with unique seeds).
+
+- seed (number: 0-4294967295)
+  Random seed for reproducibility. Same seed + same params = same image.
+  Our app generates random seeds when set to -1.
+
+- ucPreset (number)
+  Undesired Content preset level.
+  Known values:
+    0 — Heavy (strongest negative filtering)
+    1 — Light
+    2 — Human Focus
+    3 — None (no preset negatives)
+    4 — Custom (only user-provided negative prompt)
+  This controls baseline negative prompts added by NovelAI on top of
+  the user's explicit negative prompt.
+
+- qualityToggle (boolean: false)
+  Whether NovelAI should prepend its own quality tags. We set this to false
+  because our app manages quality prefixes independently via quality_pfx.
+
+- noise_schedule (string: "karras")
+  The noise schedule used during sampling.
+  Known values:
+    "karras"     — Karras noise schedule (recommended, smoother denoising)
+    "exponential" — Exponential schedule
+    "polyexponential" — Polyexponential schedule
+  Karras generally produces better results and is the default.
+
+- cfg_rescale (number: 0-1)
+  CFG rescale factor. Reduces artifacts from high CFG values.
+  0 = no rescale (default). Higher values reduce oversaturation at high scale.
+
+- skip_cfg_above_sigma (number|null)
+  If set, skips CFG guidance above this noise level sigma.
+  null = always apply CFG. Can reduce artifacts in early denoising steps.
+
+
+V4 Prompt System (v4_prompt / v4_negative_prompt):
+--------------------------------------------------
+
+The V4+ models use a structured prompt system instead of flat text.
+
+- v4_prompt.caption.base_caption (string)
+  The main positive prompt text (same content as top-level "input").
+
+- v4_prompt.caption.char_captions (array)
+  Per-character prompt definitions. Each entry:
+    - char_caption (string): character-specific prompt tags
+    - centers (array of {x, y}): position coordinates on canvas
+  This enables multi-character generation with spatial positioning.
+  Empty array = no character-specific prompts.
+
+- v4_prompt.use_coords (boolean: true)
+  Enable spatial coordinate system for character placement.
+
+- v4_prompt.use_order (boolean: true)
+  Enable ordering of character prompts (affects layering/priority).
+
+- v4_negative_prompt.caption.base_caption (string)
+  The negative prompt text. Describes what to avoid in generation.
+  Typical contents: quality defects, anatomy errors, artifacts.
+
+- v4_negative_prompt.caption.char_captions (array)
+  Per-character negative prompts. Usually empty.
+
+- v4_negative_prompt.legacy_uc (boolean: false)
+  Whether to use legacy undesired content format. False for V4+.
+
+
+Character Prompts (characterPrompts):
+-------------------------------------
+
+- characterPrompts (array)
+  Explicit character prompt list with:
+    - prompt (string): character's positive tags
+    - uc (string): character's negative tags
+    - center ({x, y}): position on canvas (0-1 normalized coordinates)
+  This is the newer character system used alongside v4_prompt.
+
+
+Director Reference Images:
+--------------------------
+
+These control "Director Tool" reference images for style/character guidance.
+
+- director_reference_images_cached (array)
+  Cached reference images by secret key hash. Each entry:
+    - cache_secret_key (string): SHA-256 hash identifying the cached image
+  Images are uploaded separately and referenced by hash for efficiency.
+
+- director_reference_descriptions (array)
+  Text descriptions for each reference image. Each entry is a v4-style
+  caption object with base_caption and char_captions.
+
+- director_reference_information_extracted (array of numbers)
+  How much information to extract from each reference.
+  1 = full extraction.
+
+- director_reference_strength_values (array of numbers: 0-1)
+  Primary strength of each reference image's influence. 1 = maximum influence.
+
+- director_reference_secondary_strength_values (array of numbers: 0-1)
+  Secondary strength value. 0 = no secondary influence.
+  Controls finer aspects of reference adherence.
+
+
+Advanced/Boolean Flags:
+-----------------------
+
+- autoSmea (boolean: false)
+  SMEA sampling. Can improve quality at higher resolutions but slower.
+
+- dynamic_thresholding (boolean: false)
+  Dynamic thresholding (Imagen-style). Alternative to CFG rescale for
+  preventing oversaturation. Generally not needed with karras schedule.
+
+- controlnet_strength (number: 1)
+  ControlNet influence strength when using ControlNet features.
+
+- legacy (boolean: false)
+  Use legacy generation pipeline. False for current models.
+
+- add_original_image (boolean: true)
+  Include original image data in response. Relevant for img2img/inpaint.
+
+- legacy_v3_extend (boolean: false)
+  V3 compatibility extension mode. False for V4+ models.
+
+- normalize_reference_strength_multiple (boolean: true)
+  Normalize reference strengths when using multiple references.
+
+- inpaintImg2ImgStrength (number: 0-1)
+  Strength of img2img transformation during inpainting. 1 = full redraw.
+
+- deliberate_euler_ancestral_bug (boolean: false)
+  Compatibility flag for a known Euler Ancestral sampler behavior.
+  False = use corrected behavior.
+
+- prefer_brownian (boolean: true)
+  Use Brownian noise tree for ancestral samplers. Produces more consistent
+  results. Recommended to keep true.
+
+- legacy_uc (boolean: false)
+  Legacy undesired content flag. False for modern models.
+
+- image_format (string: "png")
+  Output image format. "png" for lossless quality.
+
+- stream (string: "msgpack")
+  Response streaming format. "msgpack" for binary MessagePack encoding.
+  The response is a ZIP file containing generated PNG(s).
+
+
+24. DIRECTOR REFERENCE IMAGE ANALYSIS (CRITICAL GAP)
+-----------------------------------------------------
+
+This section analyzes how NovelAI's official web client handles reference images
+(called "Director Reference" images) vs how our app currently handles them.
+
+SOURCE: Captured HTTP request from NovelAI's official web client.
+
+A) WHAT THE REAL NOVELAI API EXPECTS:
+--------------------------------------
+
+NovelAI uses a TWO-STEP process for reference images:
+
+  STEP 1: Upload/Cache the image BEFORE generating
+  - The image is uploaded to NovelAI's server beforehand (separate API call)
+  - NovelAI returns a cache_secret_key (SHA-256 hash) identifying the image
+  - This hash persists server-side so the image doesn't need re-uploading
+
+  STEP 2: Reference the cached image by hash during generation
+  - The generate request does NOT contain any base64 image data
+  - Instead it sends only the cache_secret_key hash string
+  - This makes the generate request much smaller and faster
+
+The generate request contains these reference-related fields:
+
+  director_reference_images_cached: [
+    { cache_secret_key: "f804ec80..." }     // SHA-256 hash, NOT image data
+  ]
+
+  director_reference_descriptions: [
+    { caption: { base_caption: "character", char_captions: [] }, legacy_uc: false }
+  ]
+  // ^ Describes WHAT the reference represents. "character" = character ref
+
+  director_reference_information_extracted: [1]
+  // ^ How much information to extract. 1 = full extraction. Per-reference.
+
+  director_reference_strength_values: [1]
+  // ^ Primary strength (0-1). This maps to our "Strength" slider.
+
+  director_reference_secondary_strength_values: [0]
+  // ^ Secondary/fidelity strength (0-1). This maps to our "Fidelity" slider.
+
+KEY OBSERVATION about Mode (Character vs Style):
+  - The request sample has description = "character" → this is a CHARACTER reference
+  - information_extracted = 1 → extract full character features
+  - strength = 1, secondary = 0 → strong character lock, no style bleed
+  - For STYLE references, the description would likely differ and
+    information_extracted / strength balance would change
+  - The "mode" is NOT a single field but a COMBINATION of:
+    description text + information_extracted + strength balance
+
+
+B) WHAT OUR APP CURRENTLY DOES (WRONG):
+-----------------------------------------
+
+Our buildPayload() in src/lib/novelai.ts (line 103-107) sends:
+
+  referenceImages: [
+    { image: "<base64 data>", strength: 0.6, fidelity: 0.6 }
+  ]
+
+Problems:
+
+  1. WRONG FIELD NAME: We use "referenceImages" — NovelAI expects
+     "director_reference_images_cached" + separate strength arrays
+
+  2. SENDS RAW IMAGE DATA: We embed base64 image data directly in the
+     generate payload. NovelAI expects only a cache_secret_key hash.
+     This means our reference images are likely SILENTLY IGNORED by NovelAI.
+
+  3. NO UPLOAD STEP: We have no mechanism to upload/cache images to
+     NovelAI before generation. The cache endpoint is unknown.
+
+  4. WRONG STRUCTURE: We bundle strength/fidelity inside each image object.
+     NovelAI uses parallel arrays:
+       director_reference_strength_values: [s1, s2, ...]
+       director_reference_secondary_strength_values: [f1, f2, ...]
+
+  5. MODE NOT SENT: Our UI has REF_MODES (Character, Style, Character & Style)
+     in src/constants.ts but buildPayload() NEVER includes mode information.
+     The mode dropdown exists in the UI but has zero effect on the API call.
+
+  6. CHARACTER IMAGE AS REFERENCE NOT SENT: In src/App.tsx line 723-728,
+     character card images are prepared as dynamicCharRef with mode='character',
+     but they go into the same broken "referenceImages" field.
+
+
+C) WHAT NEEDS TO BE DISCOVERED:
+---------------------------------
+
+To fix reference image support, we need to find:
+
+  1. THE CACHE UPLOAD ENDPOINT
+     - NovelAI must have a separate API endpoint to upload images and receive
+       the cache_secret_key hash back.
+     - Likely something like: POST https://image.novelai.net/ai/upload-reference
+       or similar. NEEDS NETWORK CAPTURE to confirm.
+     - The upload probably requires the same Bearer auth token.
+
+  2. HOW MODE MAPS TO API FIELDS
+     - Character ref: description="character", info_extracted=1, strength=high, secondary=low
+     - Style ref: description=?, info_extracted=?, strength=?, secondary=?
+     - Character & Style: description=?, info_extracted=?, both strengths?
+     - NEEDS TESTING by capturing requests with different modes selected.
+
+  3. CACHE KEY LIFETIME
+     - How long does a cache_secret_key remain valid?
+     - Can we re-use the same hash across multiple generate calls?
+     - Does the hash expire after a session ends?
+
+  4. MULTIPLE REFERENCES
+     - The parallel array structure suggests multiple references are supported
+     - How does NovelAI handle 2+ character references? Coords?
+
+
+D) CURRENT APP REFERENCE FLOW (for context):
+----------------------------------------------
+
+Frontend (src/App.tsx):
+
+  1. Style References (static):
+     - User drops images in "Style Ref" tab
+     - Stored in references[] state with {id, data, strength, fidelity, mode}
+     - Mode selectable via dropdown: Character & Style / Character / Style
+     - Converted at line 716: staticStyleRefs with mode='style'
+
+  2. Character References (dynamic):
+     - Each character card (Multiple) can have an image
+     - At generate time (line 723): if activeChar has image, create dynamicCharRef
+     - dynamicCharRef has mode='character', strength from card, fidelity from card
+
+  3. Both merged: allRefs = [...staticStyleRefs, ...dynamicCharRef]
+     - Passed to generateImage() as references parameter
+
+  4. buildPayload() (src/lib/novelai.ts line 103):
+     - Maps to referenceImages[{image, strength, fidelity}]
+     - Mode is LOST here — not included in payload
+     - Goes to server.ts POST /api/generate
+
+  5. server.ts (line 727-729):
+     - Strips folderName from payload
+     - Forwards everything else AS-IS to NovelAI
+     - Does NOT transform referenceImages into director_reference_* format
+     - NovelAI likely ignores the unknown "referenceImages" field entirely
+
+
+E) SUMMARY TABLE — Real API vs Our App:
+-----------------------------------------
+
+  Feature               NovelAI Real API                    Our App (BROKEN)
+  ─────────────────────────────────────────────────────────────────────────────
+  Image delivery        cache_secret_key (hash only)        base64 in payload
+  Upload step           Separate upload → get hash          None (missing)
+  Strength field        director_reference_strength_values  referenceImages[].strength
+  Fidelity field        director_reference_secondary_*      referenceImages[].fidelity
+  Mode/type             description + info_extracted combo  REF_MODES exists but unused
+  Field name            director_reference_*                referenceImages (wrong)
+  Character ref image   Same director_reference system      Same broken path
+  Result                Reference works correctly           Reference likely IGNORED
+
+
+F) RECOMMENDED INVESTIGATION STEPS:
+-------------------------------------
+
+  1. Capture the image UPLOAD request from NovelAI's web client
+     → Open DevTools Network tab → Upload a reference image → Find the endpoint
+     → Record: URL, method, headers, request body, response (contains hash)
+
+  2. Capture generate requests with different reference modes:
+     → Set mode to "Character" → capture request
+     → Set mode to "Style" → capture request
+     → Set mode to "Character & Style" → capture request
+     → Compare the director_reference_* fields between them
+
+  3. Test cache_secret_key reuse:
+     → Generate twice with same reference → check if same hash works both times
+
+  Once we have the upload endpoint and mode mappings, implementation is:
+  a) Add upload endpoint call to server.ts
+  b) Transform referenceImages into director_reference_* format in buildPayload
+  c) Map REF_MODES to correct description + info_extracted values
+  d) Cache the hash client-side to avoid re-uploading same image
+
+
+G) CAPTURED DATA UPDATE (2026-04-12):
+--------------------------------------
+
+  Two real payloads captured from NovelAI web client.
+
+  Character mode confirmed values:
+    base_caption = "character"
+    information_extracted = 1
+    strength_values = 1 (UI: Strength slider)
+    secondary_strength_values = 0 (UI: Fidelity slider)
+    cache_secret_key = 64 hex chars (SHA-256)
+
+  Key findings:
+    - director_reference_* fields are CONDITIONAL — fully omitted when no refs
+    - All five arrays are PARALLEL (one entry per reference image)
+    - Upload endpoint for cache_secret_key still UNKNOWN
+    - Mode "Style" and "Character & Style" values still UNKNOWN
+
+  Full analysis in: docs/precise-reference-analysis.md
+
+
+This file should be updated whenever:
+
+- the external processor integration changes
+- the temp TXT lifecycle changes
+- prompt composition logic changes
+- startup or generation behavior changes
+- template system changes
+- queue worker logic changes
+- new API endpoints are added
+- reference image implementation changes (see docs/precise-reference-analysis.md)

@@ -1,0 +1,11 @@
+node_modules/
+build/
+dist/
+coverage/
+.claude/
+output/
+temp_character_prompts/
+.DS_Store
+*.log
+.env*
+!.env.example
