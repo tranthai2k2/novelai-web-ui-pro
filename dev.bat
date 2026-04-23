@@ -11,22 +11,19 @@ echo ============================================================
 echo   NovelAI Web UI Pro - Development Mode
 echo ============================================================
 echo.
-echo Starting TypeScript + React server...
-echo.
 
-start "NovelAI Dev Server" cmd /k "cd /d %~dp0 && npm.cmd run dev"
+powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\bootstrap-runtime.ps1" -Mode Dev
+set "EXIT_CODE=%ERRORLEVEL%"
 
-echo Waiting 3 seconds...
-timeout /t 3 /nobreak >nul
+if "%EXIT_CODE%"=="0" (
+    echo Dev server started in a new window.
+) else (
+    echo [ERROR] Development mode failed to start.
+)
 
-echo Opening browser...
-start "" http://localhost:3000
-
-echo.
-echo Server should be available at http://localhost:3000
-echo Close the "NovelAI Dev Server" window to stop it.
 echo.
 pause
 
 popd
 endlocal
+exit /b %EXIT_CODE%
